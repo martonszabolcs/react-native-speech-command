@@ -20,7 +20,7 @@ enum ModelType: String {
     case .Yamnet:
       return "yamnet"
     case .speechCommandModel:
-      return "speech_commands"
+      return "yamnet"
     }
   }
 }
