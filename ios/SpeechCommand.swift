@@ -1,7 +1,7 @@
 import TensorFlowLiteTaskAudio
 import AVFoundation
 
-struct Category: Codable{
+struct Category: Codable {
     let label: String
     let score: Float
 }
@@ -12,17 +12,17 @@ struct Result: Codable {
 }
 
 enum ModelType: String {
-  case Yamnet = "YAMNet"
-  case speechCommandModel = "Speech Command"
+    case Yamnet = "YAMNet"
+    case speechCommandModel = "Speech Command"
 
-  var fileName: String {
-    switch self {
-    case .Yamnet:
-      return "yamnet"
-    case .speechCommandModel:
-      return "yamnet"
+    var fileName: String {
+        switch self {
+        case .Yamnet:
+            return "yamnet"
+        case .speechCommandModel:
+            return "yamnet"
+        }
     }
-  }
 }
 
 private let errorDomain = ""
@@ -53,14 +53,9 @@ class SpeechCommand: RCTEventEmitter {
         }
         
         let modelFilename = modelType.fileName
-        guard
-          let modelPath = Bundle.main.path(
-            forResource: modelFilename,
-            ofType: "tflite"
-          )
-        else {
-          print("Failed to load the model file \(modelFilename).tflite.")
-          return
+        guard let modelPath = Bundle.main.path(forResource: modelFilename, ofType: "tflite") else {
+            print("Failed to load the model file \(modelFilename).tflite.")
+            return
         }
         
         let classifierOptions = AudioClassifierOptions(modelPath: modelPath)
@@ -69,13 +64,22 @@ class SpeechCommand: RCTEventEmitter {
         classifierOptions.classificationOptions.scoreThreshold = threshold
 
         do {
-          classifier = try AudioClassifier.classifier(options: classifierOptions)
-          audioRecord = try classifier?.createAudioRecord()
-          inputAudioTensor = classifier?.createInputAudioTensor()
-          print("Initialize success!")
+            classifier = try AudioClassifier.classifier(options: classifierOptions)
+            audioRecord = try classifier?.createAudioRecord()
+            inputAudioTensor = try classifier?.createInputAudioTensor()
+            
+            // Log audio tensor format details
+            if let audioFormat = inputAudioTensor?.audioFormat {
+                print("Audio format sample rate: \(audioFormat.sampleRate)")
+                print("Audio format channel count: \(audioFormat.channelCount)")
+            } else {
+                print("Audio format is nil.")
+            }
+
+            print("Initialize success!")
         } catch {
-          print("Failed to create the classifier with error: \(error.localizedDescription)")
-          return
+            print("Failed to create the classifier with error: \(error.localizedDescription)")
+            return
         }
     }
     
@@ -89,18 +93,15 @@ class SpeechCommand: RCTEventEmitter {
     @objc
     func start() {
         if overlap < 0 {
-          let error = NSError(
-            domain: errorDomain,
-            code: 0,
-            userInfo: [NSLocalizedDescriptionKey: "overlap must be equal or larger than 0."])
+            let error = NSError(domain: errorDomain, code: 0, userInfo: [NSLocalizedDescriptionKey: "overlap must be equal or larger than 0."])
             sendEvent(withName: "onError", body: error)
+            return
         }
 
         if overlap >= 1 {
-          let error = NSError(
-            domain: errorDomain, code: 0,
-            userInfo: [NSLocalizedDescriptionKey: "overlap must be smaller than 1."])
+            let error = NSError(domain: errorDomain, code: 0, userInfo: [NSLocalizedDescriptionKey: "overlap must be smaller than 1."])
             sendEvent(withName: "onError", body: error)
+            return
         }
         
         let audioSession = AVAudioSession.sharedInstance()
@@ -113,54 +114,55 @@ class SpeechCommand: RCTEventEmitter {
         }
 
         do {
-          try audioRecord?.startRecording()
-          let audioFormat = inputAudioTensor?.audioFormat
-          let lengthInMilliSeconds =
-            Double(inputAudioTensor!.bufferSize)  / Double(audioFormat!.sampleRate)
+            try audioRecord?.startRecording()
+            
+            if let audioFormat = inputAudioTensor?.audioFormat {
+                print("Starting recording with sample rate: \(audioFormat.sampleRate), channel count: \(audioFormat.channelCount)")
+            } else {
+                print("Audio format is nil.")
+            }
+            
+            let lengthInMilliSeconds = Double(inputAudioTensor!.bufferSize) / Double(inputAudioTensor!.audioFormat.sampleRate)
             let interval = lengthInMilliSeconds * Double(1 - overlap)
-            DispatchQueue.main.async(execute: {
+            DispatchQueue.main.async {
                 self.timer?.invalidate()
-                self.timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) {
-                    [weak self] _ in
+                self.timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
                     self?.processQueue.async {
                         self?.runClassification()
                     }
                 }
-            })
+            }
         } catch {
             sendEvent(withName: "onError", body: error)
         }
-      }
+    }
     
     private func runClassification() {
         let startTime = Date().timeIntervalSince1970
         do {
-          try inputAudioTensor?.load(audioRecord: audioRecord!)
-          let results = try classifier?.classify(audioTensor: inputAudioTensor!)
-          let inferenceTime = Date().timeIntervalSince1970 - startTime
+            try inputAudioTensor?.load(audioRecord: audioRecord!)
+            let results = try classifier?.classify(audioTensor: inputAudioTensor!)
+            let inferenceTime = Date().timeIntervalSince1970 - startTime
             
-          let categories = results?.classifications[0].categories.map { category -> Category in
-            let label = category.label ?? ""
-            let score = category.score
-            return Category(label: label, score: score)
-          }
+            let categories = results?.classifications[0].categories.map { category -> Category in
+                let label = category.label ?? ""
+                let score = category.score
+                return Category(label: label, score: score)
+            }
             
-            let result = Result(
-              inferenceTime: inferenceTime,
-              categories: categories!
-            )
+            let result = Result(inferenceTime: inferenceTime, categories: categories!)
             let encoder = JSONEncoder()
             encoder.nonConformingFloatEncodingStrategy = .convertToString(positiveInfinity: "Infinity", negativeInfinity: "-Infinity", nan: "NaN")
             
-            let jsonData = try! encoder.encode(result)
+            let jsonData = try encoder.encode(result)
             let jsonString = String(data: jsonData, encoding: .utf8)!
             print(jsonString)
             self.sendEvent(withName: "onResult", body: jsonString)
             
         } catch {
-          sendEvent(withName: "onError", body: error)
+            sendEvent(withName: "onError", body: error)
         }
-      }
+    }
     
     override func supportedEvents() -> [String]! {
         return ["onResult", "onError"]
